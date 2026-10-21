@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --buildsystem=meson
+
+override_dh_auto_configure:
+	dh_auto_configure -- --force-fallback-for=appmenu-glib-translator \
+		-Dmate=enabled -Dmate-hud=enabled \
+		-Dvalapanel=disabled -Dxfce=disabled -Dbudgie=disabled \
+		-Dregistrar=enabled -Dappmenu-gtk-module=enabled -Djayatana=enabled \
+		-Dappmenu-gtk-module:gtk=2,3
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/mate-appmenu
+	find debian/mate-appmenu/usr/share -type f -name LICENSE -delete
+	rm -rf debian/mate-appmenu/usr/include \
+		debian/mate-appmenu/usr/share/gir-1.0 \
+		debian/mate-appmenu/usr/share/vala \
+		debian/mate-appmenu/usr/lib/*/pkgconfig \
+		debian/mate-appmenu/usr/lib/*/girepository-1.0
+	find debian/mate-appmenu/usr/lib -type l -name '*.so' -delete

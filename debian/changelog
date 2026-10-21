@@ -1,0 +1,5 @@
+mate-appmenu (26.10~rc1-1) trixie; urgency=medium
+
+  * Initial Debian Trixie packaging. CI replaces this entry for each artifact.
+
+ -- Kerem Soke <keremsoke@gmail.com>  Wed, 21 Oct 2026 00:00:00 -0700

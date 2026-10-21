@@ -1,0 +1,38 @@
+Source: mate-appmenu
+Section: x11
+Priority: optional
+Maintainer: Kerem Soke <keremsoke@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+ meson (>= 1.0),
+ ninja-build,
+ pkgconf,
+ valac,
+ libglib2.0-dev,
+ libgtk-3-dev,
+ libgtk2.0-dev,
+ libwnck-3-dev,
+ libmate-panel-applet-dev,
+ libdbusmenu-glib-dev,
+ libjson-glib-dev,
+ libx11-dev,
+ libxkbcommon-dev,
+ systemd-dev,
+ gobject-introspection,
+ libgirepository1.0-dev,
+ default-jdk
+Standards-Version: 4.7.0
+Homepage: https://gitlab.com/KeremSoke/mate-appmenu
+Rules-Requires-Root: no
+
+Package: mate-appmenu
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, mate-panel, libglib2.0-bin,
+ default-jre | java-runtime
+Recommends: libdbusmenu-glib4
+Conflicts: mate-applet-appmenu, mate-hud, vala-panel-appmenu-common, appmenu-registrar,
+ appmenu-gtk2-module, appmenu-gtk3-module, appmenu-gtk-module-common,
+ libappmenu-gtk2-parser0, libappmenu-gtk3-parser0, libappmenu-gtk-parser-dev-common,
+ libappmenu-gtk2-parser-dev, libappmenu-gtk3-parser-dev, jayatana
+Description: global application menu for the MATE panel
+ A MATE panel applet with a D-Bus menu registrar, GLib menu translator,
+ GTK menu exporters, MATE HUD integration and Java menu support.
