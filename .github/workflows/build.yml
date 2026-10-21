@@ -37,6 +37,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Trust the checked-out repository in the Debian container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Fetch tagged source
         run: git clone --tags https://gitlab.com/KeremSoke/mate-appmenu.git /tmp/mate-appmenu-source
       - name: Plan package and generate changelog
