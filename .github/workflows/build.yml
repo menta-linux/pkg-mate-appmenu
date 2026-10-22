@@ -1,4 +1,4 @@
-name: Build Debian Trixie package
+name: Build Debian channel packages
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       source_tag:
-        description: 'Optional upstream tag (defaults to newest version tag)'
+        description: 'Optional testing tag (defaults to newest version tag)'
         required: false
 
 permissions:
@@ -21,7 +21,20 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: debian:trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: nightly
+            suite: unstable
+            image: sid
+          - channel: testing
+            suite: forky
+            image: forky
+          - channel: stable
+            suite: trixie
+            image: trixie
+    container: debian:${{ matrix.image }}
     steps:
       - name: Install tools and build dependencies
         run: |
@@ -46,11 +59,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TAG: ${{ inputs.source_tag }}
+          CHANNEL: ${{ matrix.channel }}
+          SUITE: ${{ matrix.suite }}
         run: |
           python3 scripts/build.py \
             --source-dir /tmp/mate-appmenu-source \
             --packaging-dir "$GITHUB_WORKSPACE" \
             --repository "$GITHUB_REPOSITORY" \
+            --channel "$CHANNEL" \
+            --suite "$SUITE" \
             --output-dir "$GITHUB_WORKSPACE/dist" \
             ${SOURCE_TAG:+--source-tag "$SOURCE_TAG"}
       - name: Build binary and source packages
@@ -66,9 +83,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.plan.outputs.release_tag }}
           VERSION: ${{ steps.plan.outputs.version }}
+          CHANNEL: ${{ matrix.channel }}
+          SUITE: ${{ matrix.suite }}
         run: |
           gh release create "$RELEASE_TAG" dist/*.deb dist/*.dsc dist/*.changes \
             dist/*.buildinfo dist/*.tar.xz \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "mate-appmenu $VERSION (Debian Trixie)" \
+            --title "mate-appmenu $VERSION ($CHANNEL / Debian $SUITE)" \
             --notes-file dist/release-body.md

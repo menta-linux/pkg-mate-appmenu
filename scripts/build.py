@@ -16,6 +16,7 @@ import urllib.request
 
 NAME = "mate-appmenu"
 MAINTAINER = "Kerem Soke <keremsoke@gmail.com>"
+SUITE_SUFFIX = {"trixie": "~deb13", "forky": "~deb14", "unstable": ""}
 
 
 def git(repo, *args):
@@ -54,15 +55,25 @@ def metadata(body):
     return json.loads(match.group(1)) if match else {}
 
 
-def latest_release(items, tag):
+def latest_release(items, channel, suite, source_key):
     candidates = []
     for item in items:
-        match = re.fullmatch(rf"build/{re.escape(tag)}-(\d+)", item.get("tag_name", ""))
+        match = re.fullmatch(
+            rf"build/{channel}/{suite}/{re.escape(source_key)}-(\d+)",
+            item.get("tag_name", ""),
+        )
         if match and not item.get("draft") and any(
             asset.get("name", "").endswith(".deb") for asset in item.get("assets", [])
         ):
             candidates.append((int(match.group(1)), item))
     return max(candidates, default=(0, None), key=lambda pair: pair[0])
+
+
+def newest_channel_release(items, channel, suite):
+    prefix = f"build/{channel}/{suite}/"
+    candidates = [item for item in items if item.get("tag_name", "").startswith(prefix)
+                  and item.get("assets") and not item.get("draft")]
+    return max(candidates, key=lambda item: item.get("published_at") or "", default=None)
 
 
 def version_compare(first, second):
@@ -74,12 +85,16 @@ def version_compare(first, second):
     return 0
 
 
-def version_tags(source):
+def version_tags(source, ancestor_of=None):
     tags = git(source, "tag", "--list").splitlines()
     valid = []
     for tag in tags:
         try:
             debian_upstream(tag)
+            if ancestor_of and subprocess.run(
+                ["git", "-C", str(source), "merge-base", "--is-ancestor", tag, ancestor_of]
+            ).returncode != 0:
+                continue
             valid.append(tag)
         except ValueError:
             continue
@@ -108,6 +123,8 @@ def main():
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--packaging-dir", type=Path, required=True)
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--channel", choices=("nightly", "testing", "stable"), required=True)
+    parser.add_argument("--suite", choices=tuple(SUITE_SUFFIX), required=True)
     parser.add_argument("--source-tag")
     parser.add_argument("--releases-file", help="offline release fixture for validation")
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -116,28 +133,42 @@ def main():
     source = args.source_dir.resolve()
     packaging = args.packaging_dir.resolve()
     tags = version_tags(source)
-    tag = args.source_tag or (tags[0] if tags else None)
+    if args.channel == "stable":
+        final_tags = [tag for tag in tags if not re.search(r"(?:alpha|beta|rc)[0-9]+$", tag)]
+        tag = final_tags[0] if final_tags else None
+    elif args.channel == "testing":
+        tag = args.source_tag or (tags[0] if tags else None)
+    else:
+        nightly_tags = version_tags(source, "HEAD")
+        tag = nightly_tags[0] if nightly_tags else None
     if not tag or tag not in tags:
         raise ValueError(f"source tag was not found or is unsupported: {tag}")
-    upstream = debian_upstream(tag)
-    source_sha = git(source, "rev-parse", f"{tag}^{{commit}}")
+
+    if args.channel == "nightly":
+        source_ref = "HEAD"
+        source_sha = git(source, "rev-parse", "HEAD")
+        commit_date = git(source, "show", "-s", "--format=%cd", "--date=format:%Y%m%d%H%M%S", "HEAD")
+        source_key = f"git-{commit_date}-{source_sha[:7]}"
+        upstream = f"{debian_upstream(tag)}+git{commit_date}.{source_sha[:7]}"
+    else:
+        source_ref = tag
+        source_sha = git(source, "rev-parse", f"{tag}^{{commit}}")
+        source_key = tag
+        upstream = debian_upstream(tag)
     packaging_sha = git(packaging, "rev-parse", "HEAD")
     published = releases(args.repository, args.releases_file)
-    revision, latest = latest_release(published, tag)
+    revision, latest = latest_release(published, args.channel, args.suite, source_key)
     prior = metadata(latest.get("body")) if latest else {}
     if prior.get("source_sha") == source_sha and prior.get("packaging_sha") == packaging_sha:
-        print(f"Already published {tag}-{revision} for these two commits")
+        print(f"Already published {args.channel}/{args.suite}/{source_key}-{revision} for these two commits")
         return 0
 
     revision += 1
-    version = f"{upstream}-{revision}"
-    old_source = prior.get("source_sha") or previous_tag(source, tag)
-    previous_builds = [item for item in published if item.get("tag_name", "").startswith("build/")
-                       and item.get("assets") and not item.get("draft")]
-    newest_build = max(previous_builds, key=lambda item: item.get("published_at") or "", default=None)
-    old_packaging = prior.get("packaging_sha")
-    if not old_packaging and newest_build:
-        old_packaging = metadata(newest_build.get("body", "")).get("packaging_sha")
+    version = f"{upstream}-{revision}{SUITE_SUFFIX[args.suite]}"
+    newest_build = newest_channel_release(published, args.channel, args.suite)
+    previous_info = metadata(newest_build.get("body", "")) if newest_build else {}
+    old_source = prior.get("source_sha") or previous_info.get("source_sha") or previous_tag(source, tag)
+    old_packaging = prior.get("packaging_sha") or previous_info.get("packaging_sha")
     source_commits = commit_subjects(source, old_source, source_sha)
     packaging_commits = commit_subjects(packaging, old_packaging, packaging_sha)
     out = args.output_dir.resolve()
@@ -148,7 +179,7 @@ def main():
     archive = out / f"{NAME}_{upstream}.orig.tar.xz"
     with archive.open("wb") as destination:
         archive_process = subprocess.Popen(
-            ["git", "-C", str(source), "archive", "--format=tar", f"--prefix={tree.name}/", tag],
+            ["git", "-C", str(source), "archive", "--format=tar", f"--prefix={tree.name}/", source_ref],
             stdout=subprocess.PIPE,
         )
         compressor = subprocess.run(["xz", "-T0", "-9"], stdin=archive_process.stdout, stdout=destination)
@@ -158,7 +189,7 @@ def main():
     subprocess.run(["tar", "-xJf", str(archive), "-C", str(out)], check=True)
     shutil.copytree(packaging / "debian", tree / "debian")
 
-    lines = [f"{NAME} ({version}) trixie; urgency=medium", ""]
+    lines = [f"{NAME} ({version}) {args.suite}; urgency=medium", ""]
     if source_commits:
         lines.append("  * Upstream changes:")
         lines.extend(f"    - {subject}" for subject in source_commits)
@@ -171,18 +202,23 @@ def main():
     lines.extend(["", f" -- {MAINTAINER}  {date}"])
     (tree / "debian/changelog").write_text("\n".join(lines) + "\n")
 
-    info = {"source_tag": tag, "source_sha": source_sha, "packaging_sha": packaging_sha,
-            "version": version, "revision": revision, "tree": str(tree), "archive": str(archive)}
+    info = {"channel": args.channel, "suite": args.suite, "source_tag": tag,
+            "source_ref": source_ref, "source_key": source_key, "source_sha": source_sha,
+            "packaging_sha": packaging_sha, "version": version, "revision": revision,
+            "tree": str(tree), "archive": str(archive)}
     (out / "build.json").write_text(json.dumps(info, indent=2) + "\n")
-    release_info = {key: info[key] for key in ("source_tag", "source_sha", "packaging_sha", "version", "revision")}
+    release_info = {key: info[key] for key in ("channel", "suite", "source_tag", "source_ref",
+                                                  "source_key", "source_sha", "packaging_sha", "version", "revision")}
     (out / "release-body.md").write_text(
-        f"Debian Trixie build of `{tag}`. Package version: `{version}`.\n\n"
+        f"{args.channel.title()} build for Debian {args.suite} from `{source_ref}`. "
+        f"Package version: `{version}`.\n\n"
         f"<!-- mate-appmenu-build: {json.dumps(release_info, separators=(',', ':'))} -->\n"
     )
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a") as handle:
-            handle.write(f"build=true\nversion={version}\nrelease_tag=build/{tag}-{revision}\n")
+            handle.write(f"build=true\nversion={version}\n"
+                         f"release_tag=build/{args.channel}/{args.suite}/{source_key}-{revision}\n")
     print(json.dumps(info, indent=2))
     return 0
 
